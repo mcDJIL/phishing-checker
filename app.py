@@ -17,6 +17,7 @@ class URLRequest(BaseModel):
 # Fungsi extract features
 def extract_features(url: str):
     return {
+        "unnamed:_0": 0,  # Placeholder, tidak digunakan dalam prediksi
         "num_dots": url.count("."),
         "url_length": len(url),
         "at_symbol": 1 if "@" in url else 0,
@@ -39,6 +40,7 @@ def predict(data: URLRequest):
 
     # Pastikan urutan fitur sesuai dengan training (exclude 'unnamed:_0' dan 'phising')
     feature_order = [
+        "unnamed:_0",
         "num_dots",
         "url_length",
         "at_symbol",
