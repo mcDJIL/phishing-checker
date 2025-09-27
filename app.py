@@ -1,16 +1,20 @@
 from fastapi import FastAPI
 from pydantic import BaseModel
 import joblib
-import pandas as pd
 import re
+import numpy as np
 
-# Load model & scaler
-model = joblib.load("phishing_model.pkl")
-scaler = joblib.load("scaler.pkl")
+# Load model
+model = joblib.load("./phishing_detector_model.pkl")
 
-app = FastAPI(title="Phishing URL Detection API")
+# Inisialisasi FastAPI
+app = FastAPI(title="Phishing Detection API")
 
-# ================== Feature Extraction ==================
+# Skema input user
+class URLRequest(BaseModel):
+    url: str
+
+# Fungsi extract features (pakai snake_case)
 def extract_features(url: str):
     return {
         "num_dots": url.count("."),
@@ -20,37 +24,35 @@ def extract_features(url: str):
         "num_percent": url.count("%"),
         "num_query_components": url.count("?"),
         "ip_address": 1 if re.search(r"(\d{1,3}\.){3}\d{1,3}", url) else 0,
-        "https_in_hostname": 1 if len(url.split("/")) > 2 and "https" in url.split("/")[2] else 0,
+        "https_in_hostname": (
+            1 if len(url.split("/")) > 2 and "https" in url.split("/")[2] else 0
+        ),
         "path_level": url.count("/"),
         "path_length": len(url.split("/")[-1]),
         "num_numeric_chars": sum(c.isdigit() for c in url),
     }
 
-# ================== Request Body ==================
-class URLInput(BaseModel):
-    url: str
-
-# ================== API Endpoint ==================
 @app.post("/predict")
-def predict(input: URLInput):
-    features = extract_features(input.url)
-    X_new = pd.DataFrame([features])
-    X_new_scaled = scaler.transform(X_new)
+def predict(data: URLRequest):
+    # Ekstraksi fitur
+    features = extract_features(data.url)
 
-    prob = model.predict_proba(X_new_scaled)[0][1]
-    score = int(prob * 100)
+    # Ubah jadi array (sesuai urutan kolom training)
+    X = np.array([list(features.values())])
 
-    status = "Phishing"
+    # Probabilitas phishing (kelas 1)
+    phishing_score = model.predict_proba(X)[0][1] * 100
 
-    if score >= 50:
-        status = "Phishing"
-    elif score >= 30:
-        status = "Mencurigakan"
+    # Tentukan kategori berdasarkan score
+    if phishing_score <= 30:
+        label = "aman"
+    elif phishing_score <= 70:
+        label = "mencurigakan"
     else:
-        status = "Aman"
+        label = "phishing"
 
     return {
-        "url": input.url,
-        "phishing_score": score,
-        "prediction": status
+        "url": data.url,
+        "phishing_score": round(phishing_score, 2),
+        "prediction": label,
     }
