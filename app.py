@@ -5,7 +5,7 @@ import re
 import numpy as np
 
 # Load model
-model = joblib.load("./phishing_detector_model.pkl")
+model = joblib.load("./phishing_detector_model.joblib")
 
 # Inisialisasi FastAPI
 app = FastAPI(title="Phishing Detection API")
