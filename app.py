@@ -4,61 +4,40 @@ import joblib
 import re
 import numpy as np
 
-# Load model
+# Load pipeline model
 model = joblib.load("./phishing_detector_model.joblib")
 
-# Inisialisasi FastAPI
 app = FastAPI(title="Phishing Detection API")
 
-# Skema input user
+# Skema input
 class URLRequest(BaseModel):
     url: str
 
-# Fungsi extract features
+# Fungsi ekstraksi fitur
 def extract_features(url: str):
-    return {
-        "unnamed:_0": 0,  # Placeholder, tidak digunakan dalam prediksi
-        "num_dots": url.count("."),
-        "url_length": len(url),
-        "at_symbol": 1 if "@" in url else 0,
-        "num_dash": url.count("-"),
-        "num_percent": url.count("%"),
-        "num_query_components": url.count("?"),
-        "ip_address": 1 if re.search(r"(\d{1,3}\.){3}\d{1,3}", url) else 0,
-        "https_in_hostname": (
-            1 if len(url.split("/")) > 2 and "https" in url.split("/")[2] else 0
-        ),
-        "path_level": url.count("/"),
-        "path_length": len(url.split("/")[-1]),
-        "num_numeric_chars": sum(c.isdigit() for c in url),
-    }
+    return [
+        url.count("."),                             # num_dots
+        len(url),                                   # url_length
+        1 if "@" in url else 0,                     # at_symbol
+        url.count("-"),                             # num_dash
+        url.count("%"),                             # num_percent
+        url.count("?"),                             # num_query_components
+        1 if re.search(r"(\d{1,3}\.){3}\d{1,3}", url) else 0,  # ip_address
+        1 if len(url.split("/")) > 2 and "https" in url.split("/")[2] else 0,  # https_in_hostname
+        url.count("/"),                             # path_level
+        len(url.split("/")[-1]),                    # path_length
+        sum(c.isdigit() for c in url)              # num_numeric_chars
+    ]
 
 @app.post("/predict")
 def predict(data: URLRequest):
-    # Ekstraksi fitur
-    features = extract_features(data.url)
+    # Ekstraksi fitur jadi array
+    X = np.array([extract_features(data.url)])
 
-    # Pastikan urutan fitur sesuai dengan training (exclude 'unnamed:_0' dan 'phising')
-    feature_order = [
-        "unnamed:_0",
-        "num_dots",
-        "url_length",
-        "at_symbol",
-        "num_dash",
-        "num_percent",
-        "num_query_components",
-        "ip_address",
-        "https_in_hostname",
-        "path_level",
-        "path_length",
-        "num_numeric_chars",
-    ]
-    X = np.array([[features[f] for f in feature_order]])
-
-    # Probabilitas phishing (kelas 1)
+    # Prediksi probabilitas phishing
     phishing_score = model.predict_proba(X)[0][1] * 100
 
-    # Tentukan kategori berdasarkan score
+    # Tentukan kategori
     if phishing_score <= 30:
         label = "aman"
     elif phishing_score <= 70:
