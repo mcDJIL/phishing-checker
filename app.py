@@ -1,216 +1,342 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import joblib
-import re
 import numpy as np
+import re
 from urllib.parse import urlparse
+from typing import List
 
-# Load pipeline model
-model = joblib.load("./phishing_detector_model.joblib")
+# Load model yang sudah ditraining dengan dataset Kaggle
+try:
+    model_data = joblib.load("./kaggle_phishing_model.joblib")
+    print("Kaggle phishing model loaded successfully")
+    FEATURE_COLUMNS = model_data['feature_columns']
+    MODEL_PIPELINE = model_data['pipeline']
+    MODEL_CLASSES = model_data['classes']
+except:
+    model_data = None
+    print("Warning: Kaggle model not found. Please train the model first.")
+    FEATURE_COLUMNS = []
+    MODEL_PIPELINE = None
+    MODEL_CLASSES = []
 
-app = FastAPI(title="Phishing Detection API")
+app = FastAPI(title="Kaggle Phishing Detection API")
 
-# Skema input
 class URLRequest(BaseModel):
     url: str
 
-# Whitelist domain terpercaya
-TRUSTED_DOMAINS = {
-    # Educational institutions Indonesia
-    'pens.ac.id', 'its.ac.id', 'ui.ac.id', 'ugm.ac.id', 'unair.ac.id',
-    'itb.ac.id', 'unpad.ac.id', 'undip.ac.id', 'unhas.ac.id', 'uny.ac.id',
-    'ub.ac.id', 'um.ac.id', 'unesa.ac.id', 'upi.edu', 'unsri.ac.id',
-    
-    # Government Indonesia
-    'go.id', 'kemendikbud.go.id', 'kemenkeu.go.id', 'polri.go.id',
-    'bps.go.id', 'pajak.go.id', 'bpkp.go.id', 'bkpm.go.id',
-    
-    # Major international companies
-    'google.com', 'microsoft.com', 'apple.com', 'amazon.com',
-    'facebook.com', 'twitter.com', 'linkedin.com', 'instagram.com',
-    'youtube.com', 'gmail.com', 'yahoo.com', 'outlook.com',
-    
-    # Indonesian companies
-    'tokopedia.com', 'bukalapak.com', 'shopee.co.id', 'blibli.com',
-    'bca.co.id', 'mandiri.co.id', 'bni.co.id', 'bri.co.id',
-    'detik.com', 'kompas.com', 'tribunnews.com', 'liputan6.com'
-}
+class BatchURLRequest(BaseModel):
+    urls: List[str]
 
-def is_trusted_domain(url: str) -> bool:
-    """Check if URL belongs to trusted domain"""
-    try:
-        parsed = urlparse(url)
-        domain = parsed.netloc.lower()
-        
-        # Remove www prefix
-        if domain.startswith('www.'):
-            domain = domain[4:]
-            
-        # Check exact match
-        if domain in TRUSTED_DOMAINS:
-            return True
-            
-        # Check if it's a subdomain of trusted domain
-        for trusted in TRUSTED_DOMAINS:
-            if domain.endswith('.' + trusted):
-                return True
-                
-        return False
-    except:
-        return False
-
-# Fungsi ekstraksi fitur yang diperbaiki
 def extract_features(url: str):
     """
-    Fixed feature extraction function with better logic
+    Extract features sesuai dengan dataset Kaggle phishing
+    Function ini akan disesuaikan dengan kolom yang ada di dataset
     """
     try:
-        # Parse URL properly
-        parsed = urlparse(url)
-        domain = parsed.netloc.lower()
+        parsed = urlparse(url.lower())
+        domain = parsed.netloc
         path = parsed.path
         query = parsed.query
         
-        # Remove www prefix for analysis
         if domain.startswith('www.'):
             domain = domain[4:]
+        
+        # Dictionary untuk semua fitur yang mungkin ada di dataset Kaggle
+        all_features = {
+            # Common features dari berbagai dataset Kaggle phishing
+            'having_ip_address': 1 if re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', url) else -1,
+            'url_length': 1 if len(url) < 54 else (-1 if len(url) >= 75 else 0),
+            'shortining_service': 1 if any(short in url for short in ['bit.ly', 'tinyurl', 't.co', 'goo.gl']) else -1,
+            'having_at_symbol': 1 if '@' in url else -1,
+            'double_slash_redirecting': 1 if '//' in url[7:] else -1,
+            'prefix_suffix': 1 if '-' in domain else -1,
+            'having_sub_domain': 1 if len(domain.split('.')) > 3 else (-1 if len(domain.split('.')) < 3 else 0),
+            'ssl_final_state': 1 if url.startswith('https') else (-1 if 'https' in domain else 0),
+            'domain_registeration_length': 0,  # Simplified
+            'favicon': 0,  # Simplified
+            'port': 1 if ':' in parsed.netloc and not any(x in parsed.netloc for x in [':80', ':443']) else -1,
+            'https_token': 1 if 'https' in domain else -1,
             
-        return [
-            url.count("."),                                     # num_dots
-            len(url),                                          # url_length
-            1 if "@" in url else 0,                           # at_symbol
-            url.count("-"),                                    # num_dash
-            url.count("%"),                                    # num_percent
-            url.count("?"),                                    # num_query_components
-            1 if re.search(r"(\d{1,3}\.){3}\d{1,3}", domain) else 0,  # ip_address (check domain only)
-            1 if parsed.scheme == 'https' else 0,             # https_protocol (fixed logic)
-            max(0, url.count("/") - 2),                       # path_level (subtract protocol //)
-            len(path) if path else 0,                         # path_length (actual path length)
-            sum(c.isdigit() for c in url)                     # num_numeric_chars
-        ]
+            # Request URL related (simplified)
+            'request_url': 0,
+            'url_of_anchor': 0,
+            'links_in_tags': 0,
+            'sfh': 0,
+            'submitting_to_email': 1 if 'mailto:' in url else -1,
+            'abnormal_url': 0,
+            
+            # Additional features
+            'redirect': 0,
+            'on_mouseover': 0,
+            'right_click': 0,
+            'popup_window': 0,
+            'iframe': 0,
+            'age_of_domain': 0,
+            'dns_record': 0,
+            'web_traffic': 0,
+            'page_rank': 0,
+            'google_index': 0,
+            'links_pointing_to_page': 0,
+            'statistical_report': 0,
+            
+            # Numeric features
+            'length_url': len(url),
+            'length_hostname': len(domain),
+            'ip': 1 if re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', domain) else 0,
+            'nb_dots': url.count('.'),
+            'nb_hyphens': url.count('-'),
+            'nb_at': url.count('@'),
+            'nb_qm': url.count('?'),
+            'nb_and': url.count('&'),
+            'nb_or': url.count('|'),
+            'nb_eq': url.count('='),
+            'nb_underscore': url.count('_'),
+            'nb_tilde': url.count('~'),
+            'nb_percent': url.count('%'),
+            'nb_slash': url.count('/'),
+            'nb_star': url.count('*'),
+            'nb_colon': url.count(':'),
+            'nb_comma': url.count(','),
+            'nb_semicolon': url.count(';'),
+            'nb_dollar': url.count('$'),
+            'nb_space': url.count(' '),
+            'nb_www': url.count('www'),
+            'nb_com': url.count('com'),
+            'nb_dslash': url.count('//'),
+            'http_in_path': 1 if 'http' in path else 0,
+            'https_token_in_path': 1 if 'https' in path else 0,
+            'ratio_digits_url': sum(c.isdigit() for c in url) / len(url) if url else 0,
+            'ratio_digits_host': sum(c.isdigit() for c in domain) / len(domain) if domain else 0,
+            'punycode': 1 if 'xn--' in url else 0,
+            'port_in_url': 1 if ':' in parsed.netloc else 0,
+            'tld_in_path': 1 if any(tld in path for tld in ['.com', '.org', '.net']) else 0,
+            'tld_in_subdomain': 1 if len([x for x in domain.split('.')[:-2] if x in ['com', 'org', 'net']]) > 0 else 0,
+            'abnormal_subdomain_number': max(0, len(domain.split('.')) - 3),
+            'nb_subdomains': max(0, len(domain.split('.')) - 2),
+            'prefix_suffix_sep_ratio': domain.count('-') / len(domain) if domain else 0,
+            'path_extension': 1 if '.' in path.split('/')[-1] else 0,
+            'query_length': len(query),
+            'suspicious_tld': 1 if any(tld in url for tld in ['.tk', '.ml', '.ga', '.cf']) else 0,
+            
+            # Original features dari kode sebelumnya
+            'num_dots': url.count('.'),
+            'url_length_category': 1 if len(url) < 30 else (2 if len(url) < 75 else 3),
+            'at_symbol': 1 if '@' in url else 0,
+            'num_dash': url.count('-'),
+            'num_percent': url.count('%'),
+            'num_query_components': url.count('?'),
+            'ip_address': 1 if re.search(r'(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})', domain) else 0,
+            'https_in_hostname': 1 if 'https' in domain else 0,
+            'path_level': len([x for x in path.split('/') if x]),
+            'path_length': len(path),
+            'num_numeric_chars': sum(c.isdigit() for c in url)
+        }
+        
+        # Return features sesuai dengan yang digunakan model
+        if FEATURE_COLUMNS:
+            result = []
+            for feature_name in FEATURE_COLUMNS:
+                if feature_name in all_features:
+                    result.append(all_features[feature_name])
+                else:
+                    result.append(0)  # Default value
+            return result
+        else:
+            # Fallback jika model belum loaded
+            return [
+                all_features['num_dots'],
+                all_features['url_length_category'], 
+                all_features['at_symbol'],
+                all_features['num_dash'],
+                all_features['num_percent'],
+                all_features['num_query_components'],
+                all_features['ip_address'],
+                all_features['https_in_hostname'],
+                all_features['path_level'],
+                all_features['path_length'],
+                all_features['num_numeric_chars']
+            ]
+            
     except Exception as e:
-        # Fallback to safer method if URL parsing fails
-        return [
-            url.count("."),                             
-            len(url),                                   
-            1 if "@" in url else 0,                     
-            url.count("-"),                             
-            url.count("%"),                             
-            url.count("?"),                             
-            1 if re.search(r"(\d{1,3}\.){3}\d{1,3}", url) else 0,  
-            1 if url.lower().startswith('https') else 0,  # simplified but safer check
-            max(0, url.count("/") - 2),                             
-            len(url.split("/")[-1]) if "/" in url else 0,                    
-            sum(c.isdigit() for c in url)              
-        ]
+        # Return zeros if extraction fails
+        feature_count = len(FEATURE_COLUMNS) if FEATURE_COLUMNS else 11
+        return [0] * feature_count
+
+def get_prediction_label(prediction_result):
+    """Convert model prediction to readable label"""
+    if isinstance(prediction_result, (int, float)):
+        # Binary model (0/1 or -1/1)
+        if prediction_result == 1:
+            return "phishing"
+        else:
+            return "aman"
+    else:
+        # String prediction
+        return str(prediction_result).lower()
+
+def get_confidence_score(probabilities):
+    """Calculate confidence score from probabilities"""
+    if len(probabilities) > 0:
+        return float(max(probabilities)) * 100
+    return 50.0
 
 @app.post("/predict")
 def predict(data: URLRequest):
+    """Predict single URL using trained Kaggle model"""
+    
+    if not MODEL_PIPELINE:
+        raise HTTPException(status_code=500, detail="Model not loaded. Please train the model first using the dataset.")
+    
     url = data.url.strip()
     
     # Add protocol if missing
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
     
-    # Check whitelist first
-    if is_trusted_domain(url):
-        return {
-            "url": data.url,
-            "phishing_score": 5.0,
-            "prediction": "aman",
-            "reason": "Domain terpercaya dalam whitelist",
-            "confidence": "tinggi"
-        }
-    
-    # Extract features
-    features = extract_features(url)
-    X = np.array([features])
-
-    # Prediksi probabilitas phishing
     try:
-        phishing_prob = model.predict_proba(X)[0][1]
-        phishing_score = phishing_prob * 100
-    except Exception as e:
+        # Extract features
+        features = extract_features(url)
+        X = np.array([features])
+        
+        # Predict
+        prediction = MODEL_PIPELINE.predict(X)[0]
+        probabilities = MODEL_PIPELINE.predict_proba(X)[0]
+        
+        # Convert prediction to readable format
+        prediction_label = get_prediction_label(prediction)
+        
+        # Calculate confidence
+        confidence_score = get_confidence_score(probabilities)
+        
+        # Determine confidence level
+        if confidence_score >= 80:
+            confidence_level = "tinggi"
+        elif confidence_score >= 60:
+            confidence_level = "sedang"
+        else:
+            confidence_level = "rendah"
+        
+        # Create probability dictionary
+        prob_dict = {}
+        for i, class_label in enumerate(MODEL_CLASSES):
+            readable_label = get_prediction_label(class_label)
+            prob_dict[readable_label] = round(probabilities[i] * 100, 2)
+        
         return {
             "url": data.url,
-            "error": f"Model prediction failed: {str(e)}",
-            "prediction": "error"
+            "prediction": prediction_label,
+            "confidence_score": round(confidence_score, 2),
+            "confidence_level": confidence_level,
+            "probabilities": prob_dict,
+            "model_features_used": len(features),
+            "recommendation": get_recommendation(prediction_label, confidence_score)
         }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prediction failed: {str(e)}")
 
-    # Tentukan kategori dengan threshold yang lebih realistis
-    if phishing_score <= 20:
-        label = "aman"
-        confidence = "tinggi" if phishing_score <= 10 else "sedang"
-    elif phishing_score <= 75:
-        label = "mencurigakan"
-        confidence = "sedang"
-    else:
-        label = "phishing"
-        confidence = "tinggi" if phishing_score >= 90 else "sedang"
-
-    return {
-        "url": data.url,
-        "phishing_score": round(phishing_score, 2),
-        "prediction": label,
-        "confidence": confidence,
-        "recommendation": get_recommendation(label, phishing_score)
-    }
-
-def get_recommendation(label: str, score: float) -> str:
+def get_recommendation(prediction: str, confidence_score: float) -> str:
     """Get recommendation based on prediction"""
-    if label == "aman":
-        return "URL terlihat aman untuk diakses"
-    elif label == "mencurigakan":
-        if score < 50:
-            return "URL mungkin aman, tapi tetap waspada. Periksa domain dan konten dengan teliti"
+    
+    if prediction == "aman":
+        if confidence_score >= 80:
+            return "URL terlihat sangat aman untuk diakses."
+        elif confidence_score >= 60:
+            return "URL kemungkinan aman, tapi tetap gunakan kehati-hatian umum."
         else:
-            return "URL mencurigakan. Hindari memasukkan data pribadi. Verifikasi keaslian website"
-    else:
-        return "URL sangat berbahaya! Jangan akses atau masukkan data apapun. Laporkan sebagai phishing"
-
-@app.get("/")
-def root():
-    return {
-        "message": "Phishing Detection API", 
-        "status": "running",
-        "version": "1.1.0",
-        "trusted_domains_count": len(TRUSTED_DOMAINS)
-    }
+            return "URL mungkin aman tapi model kurang yakin. Periksa dengan teliti."
+    else:  # phishing
+        if confidence_score >= 80:
+            return "BAHAYA! URL ini sangat mungkin phishing. Jangan akses dan hindari memasukkan data pribadi!"
+        elif confidence_score >= 60:
+            return "URL berpotensi berbahaya. Sangat disarankan untuk tidak mengakses."
+        else:
+            return "URL mungkin berbahaya tapi model kurang yakin. Gunakan kehati-hatian ekstra."
 
 @app.post("/batch_predict")
-def batch_predict(urls: list[str]):
-    """Predict multiple URLs at once"""
+def batch_predict(data: BatchURLRequest):
+    """Predict multiple URLs"""
+    if not MODEL_PIPELINE:
+        raise HTTPException(status_code=500, detail="Model not loaded.")
+    
     results = []
-    for url in urls:
+    for url in data.urls:
         try:
             result = predict(URLRequest(url=url))
             results.append(result)
         except Exception as e:
             results.append({
-                "url": url, 
+                "url": url,
                 "error": str(e),
                 "prediction": "error"
             })
-    return {"results": results, "total": len(urls)}
-
-@app.get("/trusted_domains")
-def get_trusted_domains():
-    """Get list of trusted domains"""
+    
+    # Summary statistics
+    summary = {
+        "aman": len([r for r in results if r.get('prediction') == 'aman']),
+        "phishing": len([r for r in results if r.get('prediction') == 'phishing']),
+        "error": len([r for r in results if r.get('prediction') == 'error'])
+    }
+    
     return {
-        "trusted_domains": sorted(list(TRUSTED_DOMAINS)),
-        "count": len(TRUSTED_DOMAINS)
+        "results": results,
+        "total": len(data.urls),
+        "summary": summary
     }
 
-@app.post("/add_trusted_domain")
-def add_trusted_domain(domain: str):
-    """Add domain to trusted list (for admin use)"""
-    domain = domain.lower().strip()
-    if domain and domain not in TRUSTED_DOMAINS:
-        TRUSTED_DOMAINS.add(domain)
-        return {"message": f"Domain {domain} added to trusted list"}
-    return {"message": f"Domain {domain} already in trusted list or invalid"}
+@app.get("/")
+def root():
+    return {
+        "message": "Kaggle Phishing Detection API",
+        "status": "running",
+        "model_type": "Trained on Kaggle Phishing Dataset",
+        "features_count": len(FEATURE_COLUMNS),
+        "classes": MODEL_CLASSES.tolist() if hasattr(MODEL_CLASSES, 'tolist') else list(MODEL_CLASSES),
+        "accuracy": model_data.get('accuracy', 0) if model_data else 0
+    }
 
-# Health check endpoint
+@app.get("/model_info")
+def model_info():
+    """Get detailed information about the loaded model"""
+    if not model_data:
+        return {"error": "Model not loaded"}
+    
+    return {
+        "model_type": str(type(MODEL_PIPELINE.named_steps['classifier'])),
+        "feature_count": len(FEATURE_COLUMNS),
+        "feature_names": FEATURE_COLUMNS[:20],  # First 20 features
+        "classes": MODEL_CLASSES.tolist() if hasattr(MODEL_CLASSES, 'tolist') else list(MODEL_CLASSES),
+        "accuracy": model_data.get('accuracy', 0),
+        "cv_scores_mean": float(np.mean(model_data.get('cv_scores', [0]))),
+        "pipeline_steps": list(MODEL_PIPELINE.named_steps.keys())
+    }
+
+@app.get("/test_features/{url:path}")
+def test_features(url: str):
+    """Test feature extraction for debugging"""
+    features = extract_features(url)
+    
+    if FEATURE_COLUMNS:
+        feature_dict = dict(zip(FEATURE_COLUMNS, features))
+        return {
+            "url": url,
+            "features": feature_dict,
+            "feature_count": len(features),
+            "non_zero_features": {k: v for k, v in feature_dict.items() if v != 0}
+        }
+    else:
+        return {
+            "url": url,
+            "features": features,
+            "feature_count": len(features),
+            "note": "Model not loaded, showing basic features"
+        }
+
 @app.get("/health")
 def health_check():
-    return {"status": "healthy", "model_loaded": model is not None}
+    return {
+        "status": "healthy",
+        "model_loaded": MODEL_PIPELINE is not None,
+        "features_available": len(FEATURE_COLUMNS) > 0
+    }
